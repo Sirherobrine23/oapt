@@ -1,7 +1,8 @@
+import {AxiosError} from "axios";
 import * as http_request from "./lib/http_request";
 // https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
 
-export const externalRegistry = /(\S+)\/([a-z0-9_\-]+)\/([a-z0-9_\-]+)(:(sha256:\S+|\S+|))?/;
+export const externalRegistry = /^([a-z0-9\._\-]+)\/([a-z0-9\._\-]+)\/([a-z0-9\._\-\/]+)(:(sha256:\S+|\S+|))?$/;
 export type manifestOptions = {
   registryBase: string,
   repository: string,
@@ -12,11 +13,11 @@ export type manifestOptions = {
 };
 
 export function prettyImage(imageName: string) {
-  if (!/\//.test(imageName)) imageName = `library/${imageName}`;
+  if (!/.*\/.*\//.test(imageName)) imageName = `library/${imageName}`;
   // Check if external registry
   if (!externalRegistry.test(imageName)) imageName = `registry-1.docker.io/${imageName}`;
-
-  const [, registry, owner, packageNameOnly,, digest] = imageName.match(externalRegistry);
+  const [, registry, owner, packageNameOnly,, digest] = imageName.match(externalRegistry)||[];
+  if (!owner && !packageNameOnly) throw new Error("invalid package name");
   const data: manifestOptions = {
     registryBase: registry,
     owner,
@@ -43,7 +44,10 @@ async function getToken(options: manifestOptions) {
   if (!/http[s]:\/\//.test(url)) url = `http://${url}`;
   if (options.authService) url += `service=${options.authService}&`
   url += `scope=repository:${options.owner}/${options.repository}:pull`;
-  return (await http_request.getJSON<requestToken>(url)).token;
+  return (await http_request.getJSON<requestToken>(url).catch((err: AxiosError) => {
+    if (err.response?.data) return Promise.reject(err.response.data.toString());
+    return Promise.reject(err);
+  })).token;
 }
 
 export type tagList = {
@@ -125,6 +129,9 @@ export async function getManifest(packageName: string) {
     headers: {
       Authorization: `Bearer ${token}`
     }
+  }).catch((err: AxiosError) => {
+    if (err.response?.data) return Promise.reject(err.response?.data?.toString());
+    return Promise.reject(err);
   });
 }
 

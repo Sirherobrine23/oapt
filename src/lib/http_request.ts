@@ -26,6 +26,7 @@ export async function getBuffer(url: string, options?: {body?: any, headers?: {[
 }
 
 export async function getJSON<JSONReturn = any>(url: string, options?: {body?: any, headers?: {[key: string]: string}}): Promise<JSONReturn> {
+  console.log(url);
   return getBuffer(url, {
     body: options?.body,
     headers: options?.headers
@@ -35,6 +36,7 @@ export async function getJSON<JSONReturn = any>(url: string, options?: {body?: a
 
 // Create function to save directly file in disk with stream
 export async function saveFile(url: string, options?: {filePath?: string|WriteStream, headers?: {[key: string]: string}}) {
+  console.log(url);
   let fileSave = path.join(tmpdir(), (Math.random()*155515151).toFixed()+"_raw_oapt.data");
   const Headers = {};
   if (options) {
