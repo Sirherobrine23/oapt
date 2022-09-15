@@ -4,7 +4,7 @@ import axios from "axios";
 import request from "request";
 import path from "node:path";
 
-export async function getBuffer(url: string, options?: {body?: any, headers?: {[key: string]: string}}): Promise<Buffer> {
+export async function getBuffer(url: string, options?: {method?: string,body?: any, headers?: {[key: string]: string}}): Promise<Buffer> {
   const Headers = {};
   let Body: any;
   if (options) {
@@ -16,7 +16,8 @@ export async function getBuffer(url: string, options?: {body?: any, headers?: {[
     responseEncoding: "arraybuffer",
     responseType: "arraybuffer",
     headers: Headers,
-    data: Body
+    data: Body,
+    method: (options?.method||"GET").toUpperCase()
   }).then(({data}) => Buffer.from(data));
   // return fetch(url, {
   //   method: "GET",
@@ -25,18 +26,17 @@ export async function getBuffer(url: string, options?: {body?: any, headers?: {[
   // }).then(res => res.arrayBuffer()).then(res => Buffer.from(res));
 }
 
-export async function getJSON<JSONReturn = any>(url: string, options?: {body?: any, headers?: {[key: string]: string}}): Promise<JSONReturn> {
-  console.log(url);
+export async function getJSON<JSONReturn = any>(url: string, options?: {method?: string, body?: any, headers?: {[key: string]: string}}): Promise<JSONReturn> {
   return getBuffer(url, {
     body: options?.body,
-    headers: options?.headers
+    headers: options?.headers,
+    method: options?.method
   }).then(res => JSON.parse(res.toString("utf8")) as JSONReturn);
 }
 
 
 // Create function to save directly file in disk with stream
 export async function saveFile(url: string, options?: {filePath?: string|WriteStream, headers?: {[key: string]: string}}) {
-  console.log(url);
   let fileSave = path.join(tmpdir(), (Math.random()*155515151).toFixed()+"_raw_oapt.data");
   const Headers = {};
   if (options) {

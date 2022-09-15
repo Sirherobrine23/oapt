@@ -1,6 +1,10 @@
 import Yargs from "yargs";
 import * as docker_image from "./docker_image";
+import { app as expressApp } from "./server";
 const yargs = Yargs(process.argv.slice(2)).help().version(false).alias("h", "help").wrap(Yargs.terminalWidth());
+
+// APT Route
+yargs.command("server", "Start server", yargs => yargs.option("port", {alias: "p", type: "number", default: 8080}).parseAsync().then(options => expressApp.listen(options.port, function(){console.log("Port listen on http://%s:%f", this.address().address === "::"?"[::]":this.address().address, this.address().port)})));
 
 // List tags
 yargs.command("list", "list tags", async yargs => {
