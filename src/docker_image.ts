@@ -1,3 +1,8 @@
+import path from "node:path";
+import fs from "node:fs";
+import crypto from "node:crypto";
+import { tmpdir } from "node:os";
+import tar from "tar";
 import {AxiosError} from "axios";
 import * as http_request from "./lib/http_request";
 // https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
@@ -118,38 +123,71 @@ export async function getManifest(packageName: string) {
   });
 }
 
-export async function downloadBlobs(packageName: string) {
+export async function downloadBlobs(packageName: string, options?: {arch?: string, platform?: string, rootSave?: string}): Promise<{file: string, folder: string, digest: string}[]> {
   const image = prettyImage(packageName);
   const token = await getToken(image);
   const packageInfo = await getManifest(packageName);
+  let platform = options?.platform||process.platform;
+  let arch = options?.arch||process.arch;
+  if (platform === "win32") platform = "windows";
+  // Fix arch
+  if (arch === "x64") arch = "amd64";
+  else if (arch === "x86") arch = "i368";
+  else if (arch === "aarch64") arch = "arm64";
+
+  const rootSave = options?.rootSave||path.join(tmpdir(), "oapt_"+crypto.randomBytes(8).toString("hex"));
+  if (!fs.existsSync(rootSave)) await fs.promises.mkdir(rootSave, {recursive: true});
   if (packageInfo.schemaVersion === 1) {
     return Promise.all(packageInfo.fsLayers.map(async layer => {
+      const fixSha256 = layer.blobSum.replace(/(sha256:|)/, "");
       return http_request.saveFile(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${layer.blobSum}`, {
+        filePath: path.join(rootSave, `${fixSha256}.tar.gz`),
         headers: {
           Authorization: `Bearer ${token}`
-        }
+        },
+      }).then(async file => {
+        await fs.promises.mkdir(path.join(path.dirname(file), `layer_${fixSha256}`), {recursive: true});
+        return tar.extract({
+          file,
+          C: path.join(path.dirname(file), `layer_${fixSha256}`),
+          keep: true,
+          p: true,
+          noChmod: false
+        }).then(() => ({file, folder: path.join(path.dirname(file), `layer_${fixSha256}`), digest: layer.blobSum}));
       });
     }));
   } else if (packageInfo.schemaVersion === 2 && !!(packageInfo.layers||packageInfo.manifests)) {
     if (packageInfo.manifests) {
       const platformImage = packageInfo.manifests.find(layer => {
-        let platform = process.platform;
-        if (platform === "win32") platform = "windows" as "win32";
-        if (layer.platform.os === platform) return true;
+        if (layer.platform.os === platform) {
+          if (arch === "any") return true;
+          if (layer.platform.architecture === arch) return true;
+        }
         return false;
       });
       if (!platformImage) throw new Error("Cannot get platform package");
-      return downloadBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`);
+      return downloadBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`, {...options, rootSave});
     } else if (packageInfo.layers) {
       return Promise.all(packageInfo.layers.map(async layer => {
-        console.log(layer.digest, layer.mediaType);
+        console.log(layer);
+        const fixSha256 = layer.digest.replace(/(sha256:|)/, "");
         return http_request.saveFile(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${layer.digest}`, {
+          filePath: path.join(rootSave, `${fixSha256}.tar.gz`),
           headers: {
             Authorization: `Bearer ${token}`
-          }
+          },
+        }).then(async file => {
+          await fs.promises.mkdir(path.join(path.dirname(file), `layer_${fixSha256}`), {recursive: true});
+          return tar.extract({
+            file,
+            C: path.join(path.dirname(file), `layer_${fixSha256}`),
+            keep: true,
+            p: true,
+            noChmod: false
+          }).then(() => ({file, folder: path.join(path.dirname(file), `layer_${fixSha256}`), digest: layer.digest}));
         });
       }));
     }
   }
-  throw new Error("Uncated");
+  throw new Error("Package not valid");
 }

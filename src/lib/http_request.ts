@@ -45,6 +45,7 @@ export async function saveFile(url: string, options?: {filePath?: string|WriteSt
   }
   const streamFile = (typeof options?.filePath === "string"||options?.filePath === undefined)?createWriteStream(fileSave, {autoClose: true}):options?.filePath;
   return new Promise<string>((done, reject) => {
-    request.get(url, {headers: Headers}).on("error", reject).pipe(streamFile).on("finish", () => done(fileSave));
+    request.get(url, {headers: Headers}).on("error", reject).pipe(streamFile);
+    streamFile.on("unpipe", () => done(fileSave));
   });
 }

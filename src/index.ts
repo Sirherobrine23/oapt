@@ -16,9 +16,9 @@ yargs.command("list", "list tags", async yargs => {
 
 // Install Package
 yargs.command("install", "Install packages", async yargs => {
-  const options = yargs.options("force", {alias: "f", type: "boolean", default: false}).parseSync();
+  const options = yargs.options("force", {alias: "f", type: "boolean", default: false}).option("platform", {alias: "p", type: "string", default: process.platform}).parseSync();
   const [, ...packagesNames] = options._;
-  await docker_image.downloadBlobs(packagesNames[0] as string).then(res => console.log("'%o'", res));
+  await docker_image.downloadBlobs(packagesNames[0] as string, {platform: options.platform}).then(res => console.log("'%o'", res));
   return;
 });
 
