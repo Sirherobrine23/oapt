@@ -18,9 +18,12 @@ yargs.command("list", "list tags", async yargs => {
 yargs.command("install", "Install packages", async yargs => {
   const options = yargs.options("force", {alias: "f", type: "boolean", default: false}).option("platform", {alias: "p", type: "string", default: process.platform}).parseSync();
   const [, ...packagesNames] = options._;
-  await docker_image.downloadBlobs(packagesNames[0] as string, {platform: options.platform}).then(res => console.log("'%o'", res));
+  console.log("%o", await docker_image.downloadBlobs(packagesNames[0] as string, {platform: options.platform}));
   return;
 });
 
 // Run CLI
-yargs.command({command: "*", handler: () => {Yargs.showHelp();}}).parseAsync();
+yargs.command({command: "*", handler: () => {Yargs.showHelp();}}).parseAsync().catch(err => {
+  console.log(String(err));
+  process.exit(1);
+});

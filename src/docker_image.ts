@@ -18,8 +18,8 @@ export type manifestOptions = {
 };
 
 const defaultHeaders = {
-  accept: "application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v1+prettyjws, application/json, application/vnd.oci.image.manifest.v1+json",
-  "accept-encoding": "gzip"
+  // "accept-encoding": "gzip",
+  accept: "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v1+prettyjws, application/json",
 }
 
 export function prettyImage(imageName: string) {
@@ -87,28 +87,39 @@ export type manifestReponsev1 = {
   signatures: {header: {jwk: {crv: string, kid: string, kty: string, x: string, y: string}, alg: string}, signature: string, protected: string}[]
 };
 
-export type manifestReponsev2 = {
+type manifestResponseV2Base = {
   schemaVersion: 2,
-  mediaType: string,
   config: {
-    mediaType: string,
+    mediaType: "application/vnd.oci.image.config.v1+json"|"application/vnd.docker.container.image.v1+json",
     size: number,
-    digest: string
+    digest: string,
   },
-  layers?: {
-    mediaType: string,
-    digest: string,
-    size: number
-  }[],
-  manifests?: {
-    mediaType: string,
+  annotations?: {
+    [key: string]: string
+  }
+}
+export type manifestResponseV2 = manifestResponseV2Base & {
+  schemaVersion: 2,
+  mediaType?: "application/vnd.docker.distribution.manifest.v2+json",
+  layers: {
+    mediaType: "application/vnd.oci.image.layer.v1.tar+gzip"|"application/vnd.oci.image.layer.v1.tar+gzip",
     digest: string,
     size: number,
-    platform: { architecture: string, os: string, variant?: string }
+    annotations?: {
+      [key: string]: string
+    }
+  }[]
+}| manifestResponseV2Base & {
+  mediaType?: "application/vnd.docker.distribution.manifest.list.v2+json",
+  manifests: {
+    mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+    digest: string,
+    size: number,
+    platform: { architecture: "arm64"|"amd64"|"i386", os: "linux"|"windows", variants?: string}
   }[]
 };
 
-export type manifestReponse = manifestReponsev1|manifestReponsev2;
+export type manifestReponse = manifestResponseV2|manifestReponsev1;
 export async function getManifest(packageName: string) {
   const image = prettyImage(packageName);
   const token = await getToken(image);
@@ -123,71 +134,32 @@ export async function getManifest(packageName: string) {
   });
 }
 
-export async function downloadBlobs(packageName: string, options?: {arch?: string, platform?: string, rootSave?: string}): Promise<{file: string, folder: string, digest: string}[]> {
+export async function downloadBlobs(packageName: string, options?: {arch?: string, platform?: string, rootSave?: string}) {
   const image = prettyImage(packageName);
-  const token = await getToken(image);
   const packageInfo = await getManifest(packageName);
+  const rootSave = options?.rootSave||path.join(tmpdir(), "oapt_"+crypto.randomBytes(8).toString("hex"));
   let platform = options?.platform||process.platform;
   let arch = options?.arch||process.arch;
+  if (!fs.existsSync(rootSave)) await fs.promises.mkdir(rootSave, {recursive: true});
   if (platform === "win32") platform = "windows";
-  // Fix arch
   if (arch === "x64") arch = "amd64";
   else if (arch === "x86") arch = "i368";
   else if (arch === "aarch64") arch = "arm64";
 
-  const rootSave = options?.rootSave||path.join(tmpdir(), "oapt_"+crypto.randomBytes(8).toString("hex"));
-  if (!fs.existsSync(rootSave)) await fs.promises.mkdir(rootSave, {recursive: true});
-  if (packageInfo.schemaVersion === 1) {
-    return Promise.all(packageInfo.fsLayers.map(async layer => {
-      const fixSha256 = layer.blobSum.replace(/(sha256:|)/, "");
-      return http_request.saveFile(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${layer.blobSum}`, {
-        filePath: path.join(rootSave, `${fixSha256}.tar.gz`),
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
-      }).then(async file => {
-        await fs.promises.mkdir(path.join(path.dirname(file), `layer_${fixSha256}`), {recursive: true});
-        return tar.extract({
-          file,
-          C: path.join(path.dirname(file), `layer_${fixSha256}`),
-          keep: true,
-          p: true,
-          noChmod: false
-        }).then(() => ({file, folder: path.join(path.dirname(file), `layer_${fixSha256}`), digest: layer.blobSum}));
-      });
-    }));
-  } else if (packageInfo.schemaVersion === 2 && !!(packageInfo.layers||packageInfo.manifests)) {
-    if (packageInfo.manifests) {
-      const platformImage = packageInfo.manifests.find(layer => {
-        if (layer.platform.os === platform) {
-          if (arch === "any") return true;
-          if (layer.platform.architecture === arch) return true;
-        }
-        return false;
-      });
-      if (!platformImage) throw new Error("Cannot get platform package");
-      return downloadBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`, {...options, rootSave});
-    } else if (packageInfo.layers) {
-      return Promise.all(packageInfo.layers.map(async layer => {
-        console.log(layer);
-        const fixSha256 = layer.digest.replace(/(sha256:|)/, "");
-        return http_request.saveFile(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${layer.digest}`, {
-          filePath: path.join(rootSave, `${fixSha256}.tar.gz`),
-          headers: {
-            Authorization: `Bearer ${token}`
-          },
-        }).then(async file => {
-          await fs.promises.mkdir(path.join(path.dirname(file), `layer_${fixSha256}`), {recursive: true});
-          return tar.extract({
-            file,
-            C: path.join(path.dirname(file), `layer_${fixSha256}`),
-            keep: true,
-            p: true,
-            noChmod: false
-          }).then(() => ({file, folder: path.join(path.dirname(file), `layer_${fixSha256}`), digest: layer.digest}));
-        });
-      }));
-    }
-  }
+  const token = await getToken(image);
+  const blobDown = async (digest: string) => {
+    const file = await http_request.saveFile(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${digest}`, {filePath: path.join(rootSave, `${digest.replace(/(sha256:|)/, "")}.tar.gz`), headers: {Authorization: `Bearer ${token}`}});
+    const folder = path.join(path.dirname(file), `layer_${digest.replace(/(sha256:|)/, "")}`);
+    await fs.promises.mkdir(folder, {recursive: true});
+    await tar.extract({file, C: folder, cwd: folder, keep: true, p: true, noChmod: false});
+    return {file, folder, digest};
+  };
+
+  if (packageInfo.schemaVersion === 1) return Promise.all(packageInfo.fsLayers.map(layer => blobDown(layer.blobSum)));
+  else if (packageInfo?.mediaType === "application/vnd.docker.distribution.manifest.list.v2+json") {
+    const platformImage = packageInfo.manifests.find(layer => layer.platform.os === platform && (arch === "any"||layer.platform.architecture === arch));
+    if (!platformImage) throw new Error("Cannot get platform package");
+    return downloadBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`, {...options, rootSave});
+  } else if (packageInfo.layers !== undefined) return Promise.all(packageInfo.layers.filter(layer => /(tar(\+|\.)gzip)$/.test(layer.mediaType)).map(layer => blobDown(layer.digest)));
   throw new Error("Package not valid");
 }
