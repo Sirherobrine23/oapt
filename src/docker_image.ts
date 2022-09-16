@@ -6,12 +6,17 @@ import {AxiosError} from "axios";
 import * as http_request from "./lib/http_request";
 // https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
 
+export type GOOS = "linux"|"windows"|"darwin"|"android"|"aix"|"dragonfly"|"freebsd"|"hurd"|"illumos"|"ios"|"js"|"linux"|"nacl"|"netbsd"|"openbsd"|"plan9"|"solaris"|"zos";
+export type GOARCH = "386"|"amd64"|"amd64p32"|"arm"|"arm64"|"arm64be"|"armbe"|"loong64"|"mips"|"mips64"|"mips64le"|"mips64p32"|"mips64p32le"|"mipsle"|"ppc"|"ppc64"|"ppc64le"|"riscv"|"riscv64"|"s390"|"s390x"|"sparc"|"sparc64"|"wasm";
+
 export const externalRegistry = /^([a-z0-9\._\-]+)\/([a-z0-9\._\-]+)\/([a-z0-9\._\-\/]+)(:(sha256:\S+|\S+|))?$/;
 export type manifestOptions = {
   registryBase: string,
   repository: string,
   owner: string,
   tagDigest?: string,
+  fullImageUrl?: string,
+  fullImage?: string,
   authBase?: string,
   authService?: string,
 };
@@ -31,7 +36,9 @@ export function prettyImage(imageName: string) {
     registryBase: registry,
     owner,
     repository: packageNameOnly,
-    tagDigest: digest||"latest"
+    tagDigest: digest||"latest",
+    fullImageUrl: `${registry}/${owner}/${packageNameOnly}:${digest||"latest"}`,
+    fullImage: `${registry}/${owner}/${packageNameOnly}`
   };
   if (/docker\.io/.test(data.registryBase)) {
     data.authBase = "https://auth.docker.io";
@@ -76,17 +83,7 @@ export async function getTags(packageName: string) {
   });
 }
 
-export type manifestReponsev1 = {
-  schemaVersion: 1,
-  name: string,
-  tag: string,
-  architecture: string,
-  fsLayers: {blobSum: string}[],
-  history: {v1Compatibility: string}[],
-  signatures: {header: {jwk: {crv: string, kid: string, kty: string, x: string, y: string}, alg: string}, signature: string, protected: string}[]
-};
-
-export type manifestResponseV2 = {
+export type manifestReponse = {
   schemaVersion: 2,
   mediaType?: "application/vnd.docker.distribution.manifest.v2+json"|"application/vnd.docker.distribution.manifest.list.v2+json",
   config?: {
@@ -110,15 +107,14 @@ export type manifestResponseV2 = {
     digest: string,
     size: number,
     platform: {
-      architecture: "arm64"|"amd64"|"i386",
-      os: "linux"|"windows"|"darwin",
+      architecture: GOARCH,
+      os: GOOS,
       variants?: string,
       "os.version"?: string
     }
   }[]
 };
 
-export type manifestReponse = manifestResponseV2|manifestReponsev1;
 export async function getManifest(packageName: string) {
   const image = prettyImage(packageName);
   const token = await getToken(image);
@@ -134,8 +130,8 @@ export async function getManifest(packageName: string) {
 }
 
 export type DockerBlob = {
-  architecture: string,
-  os: string,
+  architecture: GOARCH,
+  os: GOOS,
   rootfs: {
     type: string,
     diff_ids: string[]
@@ -143,9 +139,9 @@ export type DockerBlob = {
 }
 
 export type dockerImageInfo = {
-  architecture: string,
+  architecture: GOARCH,
   created: string|Date,
-  os: string,
+  os: GOOS,
   "moby.buildkit.buildinfo.v1"?: string,
   config: {
     WorkingDir?: string,
@@ -175,36 +171,43 @@ export type dockerImageInfo = {
   }
 }
 
-export async function downloadBlobs(packageName: string, options?: {arch?: string, platform?: string, rootSave?: string}) {
+export type blobsOptions = {arch?: string, platform?: string, rootSave?: string};
+export async function resolveBlobs(packageName: string, options?: blobsOptions): Promise<{digest: dockerImageInfo, manifest: manifestReponse, image: manifestOptions, arch: string, platform: string}> {
   const image = prettyImage(packageName);
   const packageInfo = await getManifest(packageName);
-  const rootSave = options?.rootSave||path.join(tmpdir(), "oapt_"+crypto.randomBytes(8).toString("hex"));
   let platform = options?.platform||process.platform;
   let arch = options?.arch||process.arch;
-  if (!fs.existsSync(rootSave)) await fs.promises.mkdir(rootSave, {recursive: true});
   if (platform === "win32") platform = "windows";
   if (arch === "x64") arch = "amd64";
   else if (arch === "x86") arch = "i368";
   else if (arch === "aarch64") arch = "arm64";
 
-
   const token = await getToken(image);
+  if (packageInfo.manifests?.some(layer => layer.platform !== undefined)) {
+    const platformImage = packageInfo.manifests.find(layer => layer.platform.os === platform && (arch === "any"||layer.platform.architecture === arch));
+    if (!platformImage) throw new Error("Cannot get platform package");
+    return resolveBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`, {...options});
+  } else {
+    const digest = await http_request.getJSON<dockerImageInfo>(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${packageInfo.config.digest}`, {headers: {Authorization: `Bearer ${token}`, ...defaultHeaders}});
+    return {digest, manifest: packageInfo, image, arch, platform};
+  }
+}
+
+export async function downloadBlobs(packageName: string, options?: blobsOptions): Promise<({folder: string, digest: string}|{err: string, digest: string})[]> {
+  const {image, manifest, platform, arch} = await resolveBlobs(packageName, options);
+  const token = await getToken(image);
+  const rootSave = path.join(tmpdir(), "oapt_tmp_"+crypto.randomBytes(8).toString("hex"));
+  if (!fs.existsSync(rootSave)) await fs.promises.mkdir(rootSave, {recursive: true});
   const blobDown = async (digest: string) => {
     const folder = path.join(rootSave, `layer_${digest.replace(/(sha256:|)/, "")}`);
     // await fs.promises.mkdir(folder, {recursive: true});
     await http_request.tarExtract(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${digest}`, {folderPath: folder, headers: {Authorization: `Bearer ${token}`}});
     return {folder, digest};
   };
-
-  if (packageInfo.schemaVersion === 1) throw new Error("Schema no allowd only 2");
-  else if (packageInfo.manifests?.some(layer => layer.platform !== undefined)) {
-    const platformImage = packageInfo.manifests.find(layer => layer.platform.os === platform && (arch === "any"||layer.platform.architecture === arch));
+  if (manifest.manifests?.some(layer => layer.platform !== undefined)) {
+    const platformImage = manifest.manifests.find(layer => layer.platform.os === platform && (arch === "any"||layer.platform.architecture === arch));
     if (!platformImage) throw new Error("Cannot get platform package");
-    return downloadBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`, {...options, rootSave});
-  } else {
-    const digest = await http_request.getJSON<dockerImageInfo>(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${packageInfo.config.digest}`, {headers: {Authorization: `Bearer ${token}`, ...defaultHeaders}});
-    const tarLayers = packageInfo.layers.filter(layer => /(tar(\+|\.)gzip)$/.test(layer.mediaType));
-    const layers = await Promise.all(tarLayers.map(layer => blobDown(layer.digest).catch(err => ({error: String(err), digest: layer.digest}))));
-    return {digest, manifest: packageInfo, layers};
+    return downloadBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`, {...options});
   }
+  return Promise.all(manifest.layers.map(layer => blobDown(layer.digest).catch(err => ({err: String(err), digest: layer.digest}))));
 }
