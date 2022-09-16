@@ -2,7 +2,6 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { tmpdir } from "node:os";
-import tar from "tar";
 import {AxiosError} from "axios";
 import * as http_request from "./lib/http_request";
 // https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
@@ -87,9 +86,10 @@ export type manifestReponsev1 = {
   signatures: {header: {jwk: {crv: string, kid: string, kty: string, x: string, y: string}, alg: string}, signature: string, protected: string}[]
 };
 
-type manifestResponseV2Base = {
+export type manifestResponseV2 = {
   schemaVersion: 2,
-  config: {
+  mediaType?: "application/vnd.docker.distribution.manifest.v2+json"|"application/vnd.docker.distribution.manifest.list.v2+json",
+  config?: {
     mediaType: "application/vnd.oci.image.config.v1+json"|"application/vnd.docker.container.image.v1+json",
     size: number,
     digest: string,
@@ -97,25 +97,24 @@ type manifestResponseV2Base = {
   annotations?: {
     [key: string]: string
   }
-}
-export type manifestResponseV2 = manifestResponseV2Base & {
-  schemaVersion: 2,
-  mediaType?: "application/vnd.docker.distribution.manifest.v2+json",
-  layers: {
-    mediaType: "application/vnd.oci.image.layer.v1.tar+gzip"|"application/vnd.oci.image.layer.v1.tar+gzip",
+  layers?: {
+    mediaType: "application/vnd.oci.image.layer.v1.tar+gzip"|"application/vnd.docker.image.rootfs.diff.tar.gzip",
     digest: string,
     size: number,
     annotations?: {
       [key: string]: string
     }
-  }[]
-}| manifestResponseV2Base & {
-  mediaType?: "application/vnd.docker.distribution.manifest.list.v2+json",
-  manifests: {
+  }[],
+  manifests?: {
     mediaType: "application/vnd.docker.distribution.manifest.v2+json",
     digest: string,
     size: number,
-    platform: { architecture: "arm64"|"amd64"|"i386", os: "linux"|"windows", variants?: string}
+    platform: {
+      architecture: "arm64"|"amd64"|"i386",
+      os: "linux"|"windows"|"darwin",
+      variants?: string,
+      "os.version"?: string
+    }
   }[]
 };
 
@@ -134,6 +133,48 @@ export async function getManifest(packageName: string) {
   });
 }
 
+export type DockerBlob = {
+  architecture: string,
+  os: string,
+  rootfs: {
+    type: string,
+    diff_ids: string[]
+  }
+}
+
+export type dockerImageInfo = {
+  architecture: string,
+  created: string|Date,
+  os: string,
+  "moby.buildkit.buildinfo.v1"?: string,
+  config: {
+    WorkingDir?: string,
+    StopSignal: NodeJS.Signals,
+    OnBuild: any
+    ExposedPorts: {
+      [portProto: string]: {}
+    },
+    Env: string[],
+    Entrypoint: string[],
+    Volumes: {
+      [volumePath: string]: {}
+    },
+    Labels: {
+      [labelPath: string]: string
+    },
+  },
+  history: {
+    created: string|Date,
+    created_by: string
+    empty_layer?: boolean,
+    comment?: string
+  }[],
+  rootfs: {
+    type: string,
+    diff_ids: string[]
+  }
+}
+
 export async function downloadBlobs(packageName: string, options?: {arch?: string, platform?: string, rootSave?: string}) {
   const image = prettyImage(packageName);
   const packageInfo = await getManifest(packageName);
@@ -146,20 +187,24 @@ export async function downloadBlobs(packageName: string, options?: {arch?: strin
   else if (arch === "x86") arch = "i368";
   else if (arch === "aarch64") arch = "arm64";
 
+
   const token = await getToken(image);
   const blobDown = async (digest: string) => {
-    const file = await http_request.saveFile(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${digest}`, {filePath: path.join(rootSave, `${digest.replace(/(sha256:|)/, "")}.tar.gz`), headers: {Authorization: `Bearer ${token}`}});
-    const folder = path.join(path.dirname(file), `layer_${digest.replace(/(sha256:|)/, "")}`);
-    await fs.promises.mkdir(folder, {recursive: true});
-    await tar.extract({file, C: folder, cwd: folder, keep: true, p: true, noChmod: false});
-    return {file, folder, digest};
+    const folder = path.join(rootSave, `layer_${digest.replace(/(sha256:|)/, "")}`);
+    // await fs.promises.mkdir(folder, {recursive: true});
+    await http_request.tarExtract(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${digest}`, {folderPath: folder, headers: {Authorization: `Bearer ${token}`}});
+    return {folder, digest};
   };
 
-  if (packageInfo.schemaVersion === 1) return Promise.all(packageInfo.fsLayers.map(layer => blobDown(layer.blobSum)));
-  else if (packageInfo?.mediaType === "application/vnd.docker.distribution.manifest.list.v2+json") {
+  if (packageInfo.schemaVersion === 1) throw new Error("Schema no allowd only 2");
+  else if (packageInfo.manifests?.some(layer => layer.platform !== undefined)) {
     const platformImage = packageInfo.manifests.find(layer => layer.platform.os === platform && (arch === "any"||layer.platform.architecture === arch));
     if (!platformImage) throw new Error("Cannot get platform package");
     return downloadBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`, {...options, rootSave});
-  } else if (packageInfo.layers !== undefined) return Promise.all(packageInfo.layers.filter(layer => /(tar(\+|\.)gzip)$/.test(layer.mediaType)).map(layer => blobDown(layer.digest)));
-  throw new Error("Package not valid");
+  } else {
+    const digest = await http_request.getJSON<dockerImageInfo>(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${packageInfo.config.digest}`, {headers: {Authorization: `Bearer ${token}`, ...defaultHeaders}});
+    const tarLayers = packageInfo.layers.filter(layer => /(tar(\+|\.)gzip)$/.test(layer.mediaType));
+    const layers = await Promise.all(tarLayers.map(layer => blobDown(layer.digest).catch(err => ({error: String(err), digest: layer.digest}))));
+    return {digest, manifest: packageInfo, layers};
+  }
 }
