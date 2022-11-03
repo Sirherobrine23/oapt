@@ -2,8 +2,8 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { tmpdir } from "node:os";
-import {AxiosError} from "axios";
-import * as http_request from "./lib/http_request";
+import { getJSON } from "@http/simples";
+import { tarExtract } from "@http/large"
 // https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
 
 export type GOOS = "linux"|"windows"|"darwin"|"android"|"aix"|"dragonfly"|"freebsd"|"hurd"|"illumos"|"ios"|"js"|"linux"|"nacl"|"netbsd"|"openbsd"|"plan9"|"solaris"|"zos";
@@ -60,7 +60,7 @@ export async function getToken(options: manifestOptions) {
   if (!/http[s]:\/\//.test(url)) url = `http://${url}`;
   if (options.authService) url += `service=${options.authService}&`
   url += `scope=repository:${options.owner}/${options.repository}:pull`;
-  return (await http_request.getJSON<requestToken>(url).catch((err: AxiosError) => {
+  return (await getJSON<requestToken>(url).catch((err) => {
     if (err.response?.data) return Promise.reject(err.response.data.toString());
     return Promise.reject(err);
   })).token;
@@ -75,7 +75,8 @@ export type tagList = {
 export async function getTags(packageName: string) {
   const image = prettyImage(packageName);
   const token = await getToken(image);
-  return http_request.getJSON<tagList>(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/tags/list`, {
+  return getJSON<tagList>({
+    url: `http://${image.registryBase}/v2/${image.owner}/${image.repository}/tags/list`,
     headers: {
       Authorization: `Bearer ${token}`,
       ...defaultHeaders
@@ -118,12 +119,13 @@ export type manifestReponse = {
 export async function getManifest(packageName: string) {
   const image = prettyImage(packageName);
   const token = await getToken(image);
-  return http_request.getJSON<manifestReponse>(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/manifests/${image.tagDigest}`, {
+  return getJSON<manifestReponse>({
+    url: `http://${image.registryBase}/v2/${image.owner}/${image.repository}/manifests/${image.tagDigest}`,
     headers: {
       Authorization: `Bearer ${token}`,
       ...defaultHeaders
     }
-  }).catch((err: AxiosError) => {
+  }).catch((err) => {
     if (err.response?.data) return Promise.reject(err.response?.data?.toString());
     return Promise.reject(err);
   });
@@ -188,7 +190,7 @@ export async function resolveBlobs(packageName: string, options?: blobsOptions):
     if (!platformImage) throw new Error("Cannot get platform package");
     return resolveBlobs(`${image.registryBase}/${image.owner}/${image.repository}:${platformImage.digest}`, {...options});
   } else {
-    const digest = await http_request.getJSON<dockerImageInfo>(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${packageInfo.config.digest}`, {headers: {Authorization: `Bearer ${token}`, ...defaultHeaders}});
+    const digest = await getJSON<dockerImageInfo>({url: `http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${packageInfo.config.digest}`, headers: {Authorization: `Bearer ${token}`, ...defaultHeaders}});
     return {digest, manifest: packageInfo, image, arch, platform};
   }
 }
@@ -201,7 +203,7 @@ export async function downloadBlobs(packageName: string, options?: blobsOptions)
   const blobDown = async (digest: string) => {
     const folder = path.join(rootSave, `layer_${digest.replace(/(sha256:|)/, "")}`);
     // await fs.promises.mkdir(folder, {recursive: true});
-    await http_request.tarExtract(`http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${digest}`, {folderPath: folder, headers: {Authorization: `Bearer ${token}`}});
+    await tarExtract({url: `http://${image.registryBase}/v2/${image.owner}/${image.repository}/blobs/${digest}`, folderPath: folder, headers: {Authorization: `Bearer ${token}`}});
     return {folder, digest};
   };
   if (manifest.manifests?.some(layer => layer.platform !== undefined)) {

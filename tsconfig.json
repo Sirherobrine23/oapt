@@ -1,22 +1,24 @@
 {
   "compilerOptions": {
-    "outDir": "./dist",
-    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ES2019",
     "declaration": true,
     "strict": false,
     "noUnusedLocals": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "esModuleInterop": true,
-    "moduleResolution": "node",
-    "module": "commonjs",
+    "skipLibCheck": true,
     "allowJs": true,
-    "target": "ES6",
-    "typeRoots": [
-      "node_modules/@types"
-    ]
+    "lib": ["ES6"],
+    "baseUrl": ".",
+    "paths": {
+      "@http/*": [
+        "src/request/*"
+      ]
+    }
   },
-  "exclude": ["node_modules/"],
   "include": [
     "src/**/*"
   ]
