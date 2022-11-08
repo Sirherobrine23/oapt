@@ -2,8 +2,8 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { tmpdir } from "node:os";
-import { getJSON } from "@http/simples";
-import { tarExtract } from "@http/large"
+import { httpRequest, httpRequestLarge } from "@the-bds-maneger/core-utils";
+const { getJSON, tarExtract } = {...httpRequest, ...httpRequestLarge};
 // https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
 
 export type GOOS = "linux"|"windows"|"darwin"|"android"|"aix"|"dragonfly"|"freebsd"|"hurd"|"illumos"|"ios"|"js"|"linux"|"nacl"|"netbsd"|"openbsd"|"plan9"|"solaris"|"zos";

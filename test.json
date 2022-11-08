@@ -1,0 +1,11 @@
+{
+  "architecture": "amd64",
+  "os": "linux",
+  "os.version": "5.15.0-1022-azure",
+  "rootfs": {
+    "type": "layers",
+    "diff_ids": [
+      "sha256:aedebb13c57766b62d7278c95b76c70e4776bcdfcc0eabeac1c50d80511c667a"
+    ]
+  }
+}
